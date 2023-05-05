@@ -42,7 +42,17 @@ fn sec_websocket_protocol(key: &[u8]) -> String {
   STANDARD.encode(&result[..])
 }
 
-type Error = Box<dyn std::error::Error + Send + Sync>;
+#[derive(Debug, thiserror::Error)]
+pub enum UpgradeError {
+  #[error("Sec-WebSocket-Key header is missing")]
+  SecWebSocketKeyMissing,
+
+  #[error("Sec-WebSocket-Version must be 13")]
+  SecWebSocketVersionMismatch,
+
+  #[error(transparent)]
+  HyperError(#[from] hyper::Error)
+}
 
 /// A future that resolves to a websocket stream when the associated HTTP upgrade completes.
 #[pin_project]
@@ -68,20 +78,20 @@ pub struct UpgradeFut {
 ///
 pub fn upgrade<B>(
   mut request: impl std::borrow::BorrowMut<Request<B>>,
-) -> Result<(Response<Body>, UpgradeFut), Error> {
+) -> Result<(Response<Body>, UpgradeFut), UpgradeError> {
   let request = request.borrow_mut();
 
   let key = request
     .headers()
     .get("Sec-WebSocket-Key")
-    .ok_or("Sec-WebSocket-Key header is missing")?;
+    .ok_or(UpgradeError::SecWebSocketKeyMissing)?;
   if request
     .headers()
     .get("Sec-WebSocket-Version")
     .map(|v| v.as_bytes())
     != Some(b"13")
   {
-    return Err("Sec-WebSocket-Version must be 13".into());
+    return Err(UpgradeError::SecWebSocketVersionMismatch);
   }
 
   let response = Response::builder()
@@ -157,7 +167,7 @@ fn trim_end(data: &[u8]) -> &[u8] {
 }
 
 impl std::future::Future for UpgradeFut {
-  type Output = Result<WebSocket<hyper::upgrade::Upgraded>, Error>;
+  type Output = Result<WebSocket<hyper::upgrade::Upgraded>, UpgradeError>;
 
   fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
     let this = self.project();
